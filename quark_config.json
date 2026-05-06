@@ -2,6 +2,9 @@
   "cookie": [
     "Your pan.quark.cn Cookie1, Only this one will do save task."
   ],
+  "p115_cookie": [
+    "Your 115 Cookie (UID=...; CID=...; KID=...; SEID=...)"
+  ],
   "push_config": {
     "QUARK_SIGN_NOTIFY": true,
     "其他推送渠道//此项可删": "配置方法同青龙"
@@ -48,25 +51,13 @@
       "replace": "{II}.{TASKNAME}.{DATE}.第{E}期{PART}.{EXT}"
     },
     {
-      "taskname": "测试-去广告字符",
-      "shareurl": "https://pan.quark.cn/s/d07a34a9c695#/list/share/7e25ddd87cf64443b637125478733295-夸克自动转存测试/680d91e490814da0927c38b432f88edc-带广告文件夹",
-      "savepath": "/夸克自动转存测试/去广告字符",
-      "pattern": "【XX电影网】(.*)\\.(mp4|mkv)",
-      "replace": "\\1.\\2",
-      "enddate": "2099-01-30"
-    },
-    {
-      "taskname": "测试-超期任务",
-      "shareurl": "https://pan.quark.cn/s/d07a34a9c695#/list/share/7e25ddd87cf64443b637125478733295-夸克自动转存测试",
-      "savepath": "/夸克自动转存测试/不会运行",
+      "platform": "115",
+      "taskname": "测试-115转存（请修改分享链接和保存路径后删除此行）",
+      "shareurl": "https://115.com/s/xxxxxxxx?password=yyy",
+      "savepath": "/115自动转存",
       "pattern": "",
       "replace": "",
-      "enddate": "2000-01-30",
-      "runweek": [
-        2,
-        4,
-        6
-      ]
+      "enddate": "2099-01-30"
     }
   ]
 }
