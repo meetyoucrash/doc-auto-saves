@@ -1083,6 +1083,345 @@ class Quark:
         return ico_maps.get(f.get("obj_category"), "")
 
 
+class P115:
+    """
+    115 网盘客户端，基于 p115client
+    参考 Quark 类的接口风格，用于 doc-auto-saves 的 115 转存任务
+    """
+
+    def __init__(self, cookie="", index=0):
+        self.cookie = cookie.strip()
+        self.index = index + 1
+        self.is_active = False
+        self.nickname = ""
+        self.client = None
+        self.savepath_cid = {"/": "0"}
+
+    def init(self):
+        """验证账号有效性"""
+        try:
+            from p115client import P115Client
+            self.client = P115Client(self.cookie)
+            user_info = self.client.user_info()
+            if user_info.get("state"):
+                self.is_active = True
+                self.nickname = user_info.get("data", {}).get("user_name", "未知用户")
+                return user_info.get("data", {})
+            else:
+                return False
+        except Exception as e:
+            print(f"115 账号验证失败: {e}")
+            return False
+
+    def extract_url(self, url):
+        """解析 115 分享链接，返回 (share_code, receive_code)"""
+        import re
+        match = re.search(r'115\.com/s/([a-zA-Z0-9]+)', url)
+        share_code = match.group(1) if match else None
+        pwd_match = re.search(r'[?&](?:password|pwd)=([a-zA-Z0-9]+)', url)
+        receive_code = pwd_match.group(1) if pwd_match else ""
+        return share_code, receive_code
+
+    def get_share_list(self, share_code, receive_code="", cid=0, limit=100, offset=0):
+        """获取分享链接的文件列表（使用 share_snap）"""
+        try:
+            resp = self.client.share_snap({
+                "share_code": share_code,
+                "receive_code": receive_code,
+                "cid": cid,
+                "limit": limit,
+                "offset": offset,
+            })
+            if resp.get("state"):
+                data = resp.get("data", {})
+                file_list = data.get("list", [])
+                total = data.get("count", 0)
+                return file_list, total
+            else:
+                print(f"获取分享列表失败: {resp.get('message', '未知错误')}")
+                return [], 0
+        except Exception as e:
+            print(f"获取分享列表异常: {e}")
+            return [], 0
+
+    def get_share_list_all(self, share_code, receive_code="", cid=0):
+        """获取分享链接的全部文件列表（自动分页）"""
+        all_files = []
+        offset = 0
+        limit = 100
+        while True:
+            files, total = self.get_share_list(share_code, receive_code, cid, limit, offset)
+            if not files:
+                break
+            all_files.extend(files)
+            offset += len(files)
+            if offset >= total or len(files) < limit:
+                break
+        return all_files
+
+    def get_dir_cid(self, path):
+        """根据路径获取目录 CID（不存在则创建）"""
+        if path in self.savepath_cid:
+            return self.savepath_cid[path]
+
+        # 逐级检查/创建目录
+        parts = [p for p in path.split("/") if p]
+        current_cid = "0"
+        current_path = ""
+
+        for part in parts:
+            current_path = f"{current_path}/{part}"
+            if current_path in self.savepath_cid:
+                current_cid = self.savepath_cid[current_path]
+                continue
+
+            # 检查子目录是否存在
+            children = self.ls_dir(current_cid)
+            found = None
+            for item in children:
+                if item.get("n") == part and item.get("dir", 0) == 1:
+                    found = item.get("cid", item.get("fid"))
+                    break
+
+            if found:
+                self.savepath_cid[current_path] = str(found)
+                current_cid = str(found)
+            else:
+                # 创建目录
+                result = self.mkdir(part, current_cid)
+                if result.get("state"):
+                    new_cid = result.get("data", {}).get("cid", result.get("data", {}).get("fid"))
+                    self.savepath_cid[current_path] = str(new_cid)
+                    current_cid = str(new_cid)
+                else:
+                    print(f"创建目录失败: {current_path}")
+                    return None
+
+        return current_cid
+
+    def mkdir(self, name, pid="0"):
+        """创建目录"""
+        try:
+            return self.client.fs_mkdir(name, pid=pid)
+        except Exception as e:
+            print(f"创建目录异常: {e}")
+            return {"state": False, "message": str(e)}
+
+    def ls_dir(self, cid="0"):
+        """列出目录内容"""
+        try:
+            resp = self.client.fs_files(cid=cid, limit=100, offset=0)
+            if resp.get("state"):
+                return resp.get("data", {}).get("list", [])
+            return []
+        except Exception as e:
+            print(f"列出目录异常: {e}")
+            return []
+
+    def ls_dir_all(self, cid="0"):
+        """列出目录全部内容（自动分页）"""
+        all_items = []
+        offset = 0
+        limit = 100
+        while True:
+            try:
+                resp = self.client.fs_files(cid=cid, limit=limit, offset=offset)
+                if resp.get("state"):
+                    items = resp.get("data", {}).get("list", [])
+                    if not items:
+                        break
+                    all_items.extend(items)
+                    offset += len(items)
+                    if len(items) < limit:
+                        break
+                else:
+                    break
+            except Exception as e:
+                print(f"列出目录异常: {e}")
+                break
+        return all_items
+
+    def save_file(self, file_ids, receive_code, to_cid="0"):
+        """
+        转存分享文件
+        file_ids: 文件 ID 列表（字符串列表）
+        receive_code: 分享接收码
+        to_cid: 目标目录 CID
+        """
+        try:
+            # share_receive 接收 file_id（逗号分隔的字符串）
+            file_id_str = ",".join(str(fid) for fid in file_ids)
+            resp = self.client.share_receive({
+                "file_id": file_id_str,
+                "cid": to_cid,
+                "is_check": 0,
+            })
+            return resp
+        except Exception as e:
+            print(f"转存文件异常: {e}")
+            return {"state": False, "message": str(e)}
+
+    def do_save_check(self, shareurl, savepath):
+        """测试转存功能"""
+        try:
+            share_code, receive_code = self.extract_url(shareurl)
+            if not share_code:
+                print(f"❌ 无法解析分享链接: {shareurl}")
+                return False
+
+            print(f"📎 分享码: {share_code}")
+            if receive_code:
+                print(f"🔑 提取码: {receive_code}")
+
+            # 获取分享文件列表
+            file_list = self.get_share_list_all(share_code, receive_code)
+            if not file_list:
+                print("❌ 分享为空或获取失败")
+                return False
+
+            print(f"📋 获取到 {len(file_list)} 个文件/目录")
+
+            # 获取目标目录 CID
+            to_cid = self.get_dir_cid(savepath)
+            if not to_cid:
+                print(f"❌ 无法获取目标目录: {savepath}")
+                return False
+
+            # 转存文件（只转存文件，不转存目录）
+            file_ids = [f["fid"] for f in file_list if not f.get("dir", 0)]
+            if file_ids:
+                result = self.save_file(file_ids, receive_code, to_cid)
+                if result.get("state"):
+                    print(f"✅ 转存测试成功")
+                    return True
+                else:
+                    print(f"❌ 转存测试失败: {result.get('message', '未知错误')}")
+                    return False
+            else:
+                print("⚠️ 没有可转存的文件")
+                return False
+
+        except Exception as e:
+            print(f"❌ 转存测试失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    def do_save_task(self, task):
+        """执行转存任务（对标 Quark.do_save_task）"""
+        shareurl = task.get("shareurl", "")
+        savepath = task.get("savepath", "")
+        pattern = task.get("pattern", "")
+        replace = task.get("replace", "")
+
+        # 解析分享链接
+        share_code, receive_code = self.extract_url(shareurl)
+        if not share_code:
+            add_notify(f"❌《{task['taskname']}》：无法解析分享链接\n")
+            return False
+
+        # 获取分享文件列表
+        share_file_list = self.get_share_list_all(share_code, receive_code)
+        if not share_file_list:
+            message = "分享为空，文件已被分享者删除"
+            add_notify(f"❌《{task['taskname']}》：{message}\n")
+            task["shareurl_ban"] = message
+            return False
+
+        # 获取目标目录 CID
+        to_cid = self.get_dir_cid(savepath)
+        if not to_cid:
+            add_notify(f"❌《{task['taskname']}》：无法获取目标目录 {savepath}\n")
+            return False
+
+        # 获取目标目录已有文件列表
+        dir_file_list = self.ls_dir_all(to_cid)
+        dir_filename_list = [f.get("n", f.get("file_name", "")) for f in dir_file_list]
+
+        # 文件命名类
+        mr = MagicRename(CONFIG_DATA.get("magic_regex", {}))
+        mr.set_taskname(task.get("taskname", ""))
+
+        # 魔法正则转换
+        pattern_re, replace_re = mr.magic_regex_conv(pattern, replace)
+
+        # 筛选需要转存的文件
+        need_save_list = []
+        for share_file in share_file_list:
+            file_name = share_file.get("n", share_file.get("file_name", ""))
+            is_dir = share_file.get("dir", 0) == 1
+
+            # 正则匹配
+            if pattern_re and not re.search(pattern_re, file_name):
+                continue
+
+            # 检查是否已存在
+            if not mr.is_exists(file_name, dir_filename_list):
+                if is_dir:
+                    share_file["file_name_re"] = file_name
+                    need_save_list.append(share_file)
+                else:
+                    file_name_re = mr.sub(pattern_re, replace_re, file_name)
+                    if not mr.is_exists(file_name_re, dir_filename_list):
+                        share_file["file_name_re"] = file_name_re
+                        need_save_list.append(share_file)
+
+        if not need_save_list:
+            print(f"任务结束：没有新的转存任务")
+            return False
+
+        # 执行转存
+        file_ids = [f["fid"] for f in need_save_list if not f.get("dir", 0)]
+        if file_ids:
+            err_msg = None
+            # 分批转存，每批 100 个
+            for i in range(0, len(file_ids), 100):
+                batch = file_ids[i:i+100]
+                result = self.save_file(batch, receive_code, to_cid)
+                if not result.get("state"):
+                    err_msg = result.get("message", "未知错误")
+                    break
+
+            if err_msg:
+                add_notify(f"❌《{task['taskname']}》转存失败：{err_msg}\n")
+                return False
+
+        # 构建结果树（简化版）
+        from treelib import Tree
+        tree = Tree()
+        tree.create_node(savepath, "root", data={"is_dir": True})
+
+        for item in need_save_list:
+            file_name_re = item.get("file_name_re", item.get("n", ""))
+            icon = "📁" if item.get("dir") else ""
+            tree.create_node(
+                f"{icon}{file_name_re}",
+                item["fid"],
+                parent="root",
+                data={
+                    "file_name": item.get("n", ""),
+                    "file_name_re": file_name_re,
+                    "is_dir": item.get("dir", 0) == 1,
+                },
+            )
+
+        print()
+        add_notify(f"✅《{task['taskname']}》添加追更：\n{tree}")
+        return tree
+
+    def update_savepath_cid(self, tasklist):
+        """预加载所有保存路径的 CID"""
+        dir_paths = [
+            re.sub(r"/{2,}", "/", f"/{item['savepath']}")
+            for item in tasklist
+            if item.get("platform") == "115"
+            and (not item.get("enddate")
+                 or (datetime.now().date() <= datetime.strptime(item["enddate"], "%Y-%m-%d").date()))
+        ]
+        for path in dir_paths:
+            self.get_dir_cid(path)
+
+
 def verify_account(account):
     # 验证账号
     print(f"▶️ 验证第{account.index}个账号")
@@ -1180,7 +1519,62 @@ def do_save(account, tasklist=[]):
             )
 
     # 执行任务
-    for index, task in enumerate(tasklist):
+    p115_tasks = [t for t in tasklist if t.get("platform") == "115"]
+    quark_tasks = [t for t in tasklist if not t.get("platform") or t.get("platform") != "115"]
+
+    # 115 任务使用 P115 类处理
+    if p115_tasks and isinstance(account, P115):
+        print(f"🧩 载入插件")
+        plugins, CONFIG_DATA["plugins"], task_plugins_config = Config.load_plugins(
+            CONFIG_DATA.get("plugins", {})
+        )
+        print()
+        print(f"转存账号: {account.nickname} (115网盘)")
+        account.update_savepath_cid(p115_tasks)
+
+        for plugin_name, plugin in plugins.items():
+            if plugin.is_active and hasattr(plugin, "task_before"):
+                p115_tasks = (
+                    plugin.task_before(tasklist=p115_tasks, account=account) or p115_tasks
+                )
+
+        for index, task in enumerate(p115_tasks):
+            print()
+            print(f"#{index+1}------------------")
+            print(f"任务名称: {task['taskname']} [115]")
+            print(f"分享链接: {task['shareurl']}")
+            print(f"保存路径: {task['savepath']}")
+            if task.get("pattern"):
+                print(f"正则匹配: {task['pattern']}")
+            if task.get("replace"):
+                print(f"正则替换: {task['replace']}")
+            print()
+            if not is_time(task):
+                print(f"任务不在运行周期内，跳过")
+            else:
+                is_new_tree = account.do_save_task(task)
+                if is_new_tree:
+                    print(f"🧩 调用插件")
+                    for plugin_name, plugin in plugins.items():
+                        if plugin.is_active and hasattr(plugin, "run"):
+                            task = (
+                                plugin.run(task, account=account, tree=is_new_tree) or task
+                            )
+
+        print()
+        print(f"===============插件收尾===============")
+        for plugin_name, plugin in plugins.items():
+            if plugin.is_active and hasattr(plugin, "task_after"):
+                data = plugin.task_after(tasklist=p115_tasks, account=account)
+                if data.get("tasklist"):
+                    CONFIG_DATA["tasklist"] = data["tasklist"]
+                if data.get("config"):
+                    CONFIG_DATA["plugins"][plugin_name] = data["config"]
+        print()
+        return  # 115 任务处理完毕，直接返回
+
+    # 夸克任务使用原有逻辑
+    for index, task in enumerate(quark_tasks):
         print()
         print(f"#{index+1}------------------")
         print(f"任务名称: {task['taskname']}")
@@ -1314,6 +1708,26 @@ def main():
         else:
             do_save(accounts[0], CONFIG_DATA.get("tasklist", []))
         print()
+
+    # ========== 115 网盘转存 ==========
+    p115_cookie_val = CONFIG_DATA.get("p115_cookie")
+    if p115_cookie_val and cookie_form_file:
+        p115_cookies = Config.get_cookies(p115_cookie_val)
+        if p115_cookies:
+            print(f"===============115网盘转存===============")
+            p115_account = P115(p115_cookies[0])
+            if p115_account.init():
+                # 分离 115 任务
+                all_tasks = CONFIG_DATA.get("tasklist", [])
+                p115_tasks = [t for t in all_tasks if t.get("platform") == "115"]
+                if p115_tasks:
+                    do_save(p115_account, p115_tasks)
+                else:
+                    print("⚠️ 未找到 115 转存任务（请在 tasklist 中设置 platform: '115'）")
+            else:
+                print("❌ 115 账号验证失败，跳过 115 转存")
+            print()
+
     # 通知
     if NOTIFYS:
         notify_body = "\n".join(NOTIFYS)
