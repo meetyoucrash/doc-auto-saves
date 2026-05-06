@@ -2,9 +2,9 @@
 
 ![quark-logo](img/icon.png)
 
-# 夸克网盘自动转存
+# 夸克网盘 & 115 网盘自动转存
 
-夸克网盘签到、自动转存、命名整理、发推送提醒和刷新媒体库一条龙。
+夸克网盘 / 115 网盘签到、自动转存、命名整理、发推送提醒和刷新媒体库一条龙。
 
 对于一些持续更新的资源，隔段时间去转存十分麻烦。
 
@@ -39,6 +39,10 @@
   - [x] 可能~~兼容青龙~~
   - [x] Docker 部署，WebUI 配置
 
+- 支持平台
+  - [x] 夸克网盘（Quark）自动转存
+  - [x] 115 网盘（P115）自动转存 <sup>new</sup>
+
 - 分享链接
   - [x] 支持分享链接的子目录
   - [x] 记录失效分享并跳过任务
@@ -63,9 +67,10 @@
   - [x] 插件模块化，允许自行开发和挂载[插件](./plugins)
 
 - 其它
-  - [x] 每日签到领空间 <sup>[?](https://github.com/Cp0204/quark-auto-save/wiki/使用技巧集锦#每日签到领空间)</sup>
+  - [x] 每日签到领空间（夸克）
   - [x] 支持多个通知推送渠道 <sup>[?](https://github.com/Cp0204/quark-auto-save/wiki/通知推送服务配置)</sup>
   - [x] 支持多账号（多账号签到，仅首账号转存）
+  - [x] 115 网盘转存（基于 p115client，配置 p115_cookie 即可使用）
 
 ## 部署
 
@@ -116,6 +121,7 @@ services:
 | `PORT`           | `5005`     | 管理后台端口                             |
 | `PLUGIN_FLAGS`   |            | 插件标志，如 `-emby,-aria2` 禁用某些插件 |
 | `TASK_TIMEOUT`   | `1800`     | 任务执行超时时间（秒），超时则任务结束   |
+| `P115_COOKIE`   |            | 115 网盘 Cookie（UID=...; CID=...; KID=...; SEID=...），也可配置在 quark_config.json 的 p115_cookie 中 |
 
 #### 一键更新
 
@@ -160,6 +166,31 @@ docker run --rm -v /var/run/docker.sock:/var/run/docker.sock containrrr/watchtow
 在有新转存时，可触发完成相应功能，如自动刷新媒体库、生成 .strm 文件等。配置指南：[插件配置](https://github.com/Cp0204/quark-auto-save/wiki/插件配置)
 
 媒体库模块以插件的方式的集成，如果你有兴趣请参考[插件开发指南](https://github.com/Cp0204/quark-auto-save/tree/main/plugins)。
+
+### 115 网盘转存
+
+本项目新增支持 115 网盘自动转存功能，使用方式与夸克网盘类似。
+
+配置方法：
+1. 在 `quark_config.json` 中添加 `p115_cookie` 配置（或在 WebUI 中配置）
+2. 在任务中添加 `"platform": "115"` 字段即可指定该任务为 115 转存
+
+示例任务配置：
+```json
+{
+  "platform": "115",
+  "taskname": "115 自动转存",
+  "shareurl": "https://115.com/s/xxxxxxxx?password=yyy",
+  "savepath": "/目标目录",
+  "pattern": "",
+  "replace": "",
+  "enddate": "2099-01-30"
+}
+```
+
+注意事项：
+- 115 分享链接格式：`https://115.com/s/{share_code}?password={pwd}`
+- 115 Cookie 获取：浏览器登录 115.com 后，从开发者工具复制 Cookie（需要 UID、CID、KID、SEID 字段）
 
 ### 更多使用技巧
 
