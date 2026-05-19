@@ -47,8 +47,12 @@ def parse_panel(lines):
         line = lines[i].strip()
         
         if line.startswith('http') and '115cdn' in line:
-            clean = line.split('?')[0] if '?password' in line.lower() else line
-            data['链'] = clean
+            # 保留完整 URL（含 ?password=xxx）
+            data['链'] = line
+            # 从 URL 中提取 password
+            pw_match = re.search(r'[?&](?:password|pwd)=([^&\s]+)', line)
+            if pw_match and pw_match.group(1) != '***':
+                data['提取码'] = pw_match.group(1)
             i += 1
             continue
         
@@ -69,9 +73,13 @@ def parse_panel(lines):
             while j < n and lines[j] in UI_SET:
                 j += 1
             if j < n and lines[j].startswith('http') and '115cdn' in lines[j]:
-                clean = lines[j].split('?')[0] if '?password' in lines[j].lower() else lines[j]
+                # 保留完整 URL（含 ?password=xxx）
                 if '链' not in data:
-                    data['链'] = clean
+                    data['链'] = lines[j]
+                    # 从 URL 中提取 password
+                    pw_match = re.search(r'[?&](?:password|pwd)=([^&\s]+)', lines[j])
+                    if pw_match and pw_match.group(1) != '***':
+                        data['提取码'] = pw_match.group(1)
             elif j < n and not lines[j].startswith('http') and not re.match(r'\d{2}/\d{2} \d{2}:\d{2}', lines[j]):
                 data['规格信息'] = lines[j]
             i += 1
