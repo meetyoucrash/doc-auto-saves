@@ -2,3 +2,5 @@ quark_config_debug.json
 __pycache__
 /config
 .vscode
+# KDocs 115 缓存（tracked.json 保留追踪状态）
+data/kdocs_115/records.json
