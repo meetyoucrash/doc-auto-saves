@@ -1,86 +1,115 @@
 #!/usr/bin/env python3
 """
-kdocs_115_cron.py — KDocs 115 增量子转存 Cron 包装器
-一次性完成: 提取 → 增量检测 → 任务注入 → 转存执行
+KDocs 115 定时任务包装器
+顺序执行: scraper -> injector
 
 用法:
-  python3 kdocs_115_cron.py                    # 全流程执行
-  python3 kdocs_115_cron.py --scrape-only      # 只提取数据
-  python3 kdocs_115_cron.py --dry-run          # 只看新增，不转存
-  
-作为 cron 任务:
-  0 */6 * * * cd /path/to/repo && python3 kdocs_115_cron.py >> cron_kdocs.log 2>&1
+  python3 kdocs_115_cron.py              # 完整流程
+  python3 kdocs_115_cron.py --scrape-only # 只提取，不转存
+  python3 kdocs_115_cron.py --dry-run     # 只预览，不执行
+  python3 kdocs_115_cron.py --gen-tasks   # 只生成 TASKLIST JSON
+
+环境变量:
+  P115_COOKIE - 115 网盘 Cookie（用于调用 API 获取文件列表）
 """
-import json, os, sys, subprocess, datetime
+import os, sys, json, subprocess
 
+# BASE_DIR: 脚本所在目录
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-OUTDIR = os.path.join(BASE_DIR, "data/kdocs_115")
-SCRAPER = os.path.join(BASE_DIR, "kdocs_115_scraper.py")
-INJECTOR = os.path.join(BASE_DIR, "kdocs_115_injector.py")
 
-def log(msg):
-    ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{ts}] {msg}")
-
-def scrape_kdocs():
+def run_scraper():
     """运行提取器"""
-    log("开始提取 KDocs 数据...")
+    scraper = os.path.join(BASE_DIR, "kdocs_115_scraper.py")
+    if not os.path.exists(scraper):
+        print(f"错误: 提取器不存在: {scraper}")
+        return None
+    
     result = subprocess.run(
-        ['python3', SCRAPER],
-        capture_output=True, text=True, timeout=120
+        [sys.executable, scraper],
+        capture_output=True, text=True, timeout=300
     )
-    for line in result.stdout.split('\n'):
-        if line.strip():
-            log(line.strip())
-    if result.stderr:
-        for line in result.stderr.split('\n'):
-            if line.strip():
-                log(f"ERR: {line.strip()}")
-    return result.returncode == 0
+    
+    if result.returncode != 0:
+        print(f"提取器失败: {result.stderr[:500]}")
+        return None
+    
+    print(result.stdout)
+    return result.stdout
 
-def run_injector(dry_run=False):
+def run_injector(dry_run=False, gen_tasks=False, scrape_only=False):
     """运行注入器"""
-    cmd = ['python3', INJECTOR]
+    injector = os.path.join(BASE_DIR, "kdocs_115_injector.py")
+    if not os.path.exists(injector):
+        print(f"错误: 注入器不存在: {injector}")
+        return None
+    
+    args = [sys.executable, injector]
     if dry_run:
-        cmd.append('--dry-run')
-    log("运行增量注入...")
+        args.append("--dry-run")
+    if gen_tasks:
+        args.append("--gen-tasks")
+    if scrape_only:
+        args.append("--scrape-only")
+    
+    env = os.environ.copy()
+    # 传递 115 cookie
+    cookie = os.environ.get('P115_COOKIE', '')
+    if cookie:
+        env['P115_COOKIE'] = cookie
+    
     result = subprocess.run(
-        cmd, capture_output=True, text=True, timeout=600
+        args,
+        capture_output=True, text=True, timeout=600,
+        env=env
     )
-    for line in result.stdout.split('\n'):
-        if line.strip():
-            log(line.strip())
-    if result.stderr and 'Traceback' in result.stderr:
-        log(f"注入错误 ({os.path.basename(INJECTOR)}):")
-        for line in result.stderr.split('\n')[-5:]:
-            if line.strip():
-                log(f"  {line.strip()}")
-    return result.returncode == 0
+    
+    if result.returncode != 0:
+        print(f"注入器失败: {result.stderr[:500]}")
+        return None
+    
+    if gen_tasks:
+        # 输出 TASKLIST JSON
+        print(result.stdout)
+    else:
+        print(result.stdout)
+    
+    return result.stdout
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description='KDocs 115 Cron')
-    parser.add_argument('--scrape-only', action='store_true', help='只提取数据')
-    parser.add_argument('--dry-run', action='store_true', help='只看新增，不转存')
+    parser = argparse.ArgumentParser(description='KDocs 115 定时任务包装器')
+    parser.add_argument('--scrape-only', action='store_true', help='只提取，不转存')
+    parser.add_argument('--dry-run', action='store_true', help='只预览，不执行')
+    parser.add_argument('--gen-tasks', action='store_true', help='只生成 TASKLIST JSON')
     args = parser.parse_args()
     
-    log("=== KDocs 115 定时增量子转存 ===")
+    print("=== KDocs 115 定时任务 ===")
     
-    # Step 1: 提取
-    if not scrape_kdocs():
-        log("❌ 提取失败，终止")
-        return 1
+    # 1. 运行提取器
+    if not args.gen_tasks:
+        print("[1/2] 运行提取器...")
+        scraper_output = run_scraper()
+        if scraper_output is None:
+            print("提取失败，跳过注入")
+            return
     
+    # 2. 运行注入器
     if args.scrape_only:
-        log("☑ 仅提取，完成")
-        return 0
+        print("[2/2] 跳过注入（--scrape-only）")
+        return
     
-    # Step 2: 注入转存
-    if not run_injector(dry_run=args.dry_run):
-        log("⚠ 注入部分失败")
+    print("[2/2] 运行注入器...")
+    injector_output = run_injector(
+        dry_run=args.dry_run,
+        gen_tasks=args.gen_tasks,
+        scrape_only=args.scrape_only
+    )
     
-    log("== 完成 ==")
-    return 0
+    if injector_output is None:
+        print("注入失败")
+        return
+    
+    print("\n=== 完成 ===")
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
